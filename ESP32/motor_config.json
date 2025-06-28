@@ -1,0 +1,17 @@
+{
+  "current_threshold": 900,
+  "move_timeout_open_ms": 40000,
+  "move_timeout_close_ms": 40000,
+  "pin": {
+    "ina": {
+      "sda": 1,
+      "sdc": 2
+    },
+    "ibt": {
+      "in1": 4,
+      "in2": 5,
+      "l_en": 40,
+      "r_en": 41
+    }
+  }
+}
