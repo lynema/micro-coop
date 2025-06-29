@@ -28,6 +28,8 @@ class MotorController:
         self.motor_busy = False
         self.door_state = "stopped"
         self.current_mv = 0
+        self.last_higest_average_mv = 0
+        self.motor_stop()
 
     def motor_stop(self):
         """Stops the motor."""
@@ -51,11 +53,15 @@ class MotorController:
         self.R_EN.value(1)
 
     def safe_move(self, action, log):
+        if not self.current_sensor:
+            log("[ERROR] No current_sensor initialized motor cannot run")
+            return False
         """Executes a safe move (open/close) with retries and obstruction detection."""
         if self.motor_busy:
             return  # Avoid running another operation while the motor is busy
 
         self.motor_busy = True
+        higest_average_mv = 0
         try:
             move_func = self.motor_open if action == 'open' else self.motor_close
             timeout = self.MOVE_TIMEOUT_OPEN_MS if action == 'open' else self.MOVE_TIMEOUT_CLOSE_MS
@@ -77,6 +83,7 @@ class MotorController:
 
                 while time.ticks_diff(time.ticks_ms(), start) < timeout:
                     now = time.ticks_ms()
+                    last_higest_average_mv = 0
                     time.sleep(0.11)  # Sampling rate
                     if time.ticks_diff(now, last_sample_time) >= sample_interval:
                         last_sample_time = now
@@ -89,6 +96,8 @@ class MotorController:
                         if len(current_buffer) > buffer_size:
                             avg_current = sum(current_buffer) / len(current_buffer)
                             self.current_mv = avg_current
+                            if higest_average_mv < avg_current:
+                                higest_average_mv = avg_current
                             current_buffer.pop(0)
                             if avg_current < self.CURRENT_IDLE_THRESHOLD:
                                 self.door_state = action
@@ -117,6 +126,7 @@ class MotorController:
 
             self.motor_stop()
         finally:
+            self.last_higest_average_mv = higest_average_mv
             self.motor_busy = False
             
 def fetch_motor_config():

@@ -6,6 +6,7 @@ from time_utils import is_dst, get_est_offset, parse_time, today_times
 from sun_data_utils import build_month_cache, load_sun_data, manage_cache, max_cache_age_months
 import uasyncio as asyncio
 import sys
+import esp32
 
 from motor_controller import MotorController
 from current_sensor import CurrentSensor
@@ -13,7 +14,7 @@ from neo_pixel import NeoPixelController
 
 # --- LOGGING BUFFER ---
 log_buffer = []
-MAX_LOG_LINES = 15
+MAX_LOG_LINES = 45
 FAILSAFE=True
 
 FAILSAFE_OPEN_TO_CLOSED = 22 * 3600 + 30 * 60   # 10:30 PM
@@ -69,8 +70,12 @@ except ValueError as e:
     
 #t-picoc3 i2c = I2C(0, sda=Pin(24), scl=Pin(21))
 i2c = I2C(0, sda=Pin(ina_pins["sda"], Pin.OUT), scl=Pin(ina_pins["sdc"], Pin.OUT), freq=10000) 
-current_sensor = CurrentSensor(i2c)
-
+current_sensor = None
+try:
+    current_sensor = CurrentSensor(i2c)
+except OSError as e:
+    log(f"[ERROR] Configuration error with current sensor: {e}")
+    
 motor_controller = MotorController(
     #t-picoc3 in1_pin=14, in2_pin=15, l_en_pin=16, r_en_pin=17,
     in1_pin=ibt_pins["in1"], in2_pin=ibt_pins["in2"], l_en_pin=ibt_pins["l_en"], r_en_pin=ibt_pins["r_en"], 
@@ -226,8 +231,11 @@ def html_page():
     timeout_open = motor_config.get("move_timeout_open_ms", "N/A")
     timeout_close = motor_config.get("move_timeout_close_ms", "N/A")
     max_cache_age = max_cache_age_months(now[0], now[1])
-    current_current = current_sensor.get_current_ma()
+    current_current = "N/A"
+    if current_sensor:
+        current_current = current_sensor.get_current_ma()
     log_html = '<br>'.join(log_buffer[::-1])
+    internal_temperature = (esp32.mcu_temperature() * 9 / 5) + 32
     return f"""<!DOCTYPE html><html><body>
 <h2>Auto Coop Door</h2>
 <form action="/" method="get">
@@ -242,8 +250,10 @@ Timeout Open (ms): <input name="timeout_open" type="number" value="{timeout_open
 Timeout Close (ms): <input name="timeout_close" type="number" value="{timeout_close}">
 <button type="submit" name="Update Settings" value="1">Update Settings</button>
 </form>
+<p>MCU Internal Temperature: <b>{internal_temperature}</b></p>
 <p>Door: <b>{motor_controller.door_state}</b></p>
-<p>Current: <b>{current_current} mV</b></p>
+<p>Current Current: <b>{current_current} mV</b></p>
+<p>Last Highest Average Current:<b>{motor_controller.last_higest_average_mv} mV</b></p>
 <p>Local Date and Time: <b>{date_str} {local_time_str}</b></p>
 <p>Local Time Seconds: <b>{local_time_seconds}</b></p>
 <p>Sunrise (Door opens between 10m before and 10m after): <b>{sunrise_str}</b></p>
@@ -257,12 +267,16 @@ Timeout Close (ms): <input name="timeout_close" type="number" value="{timeout_cl
 <h3>Logs</h3><div style='font-family:monospace;'>{log_html}</div>
 </body></html>"""
 
+# Read the PNG file and print out the byte data
+with open("favicon.ico", "rb") as f:
+    favicon_data = f.read()
+
 # --- WEB SERVER MODIFICATION ---
 def serve():
+    s = socket.socket()
     try:
         global FAILSAFE
         addr = socket.getaddrinfo('0.0.0.0', 80)[0][-1]
-        s = socket.socket()
         s.bind(addr)
         s.listen(1)
         log("[INFO] Web server started on port 80")
@@ -315,12 +329,21 @@ def serve():
                 cl.send("pong")
                 cl.close()
                 continue
-
+            elif 'GET /favicon.ico' in req:
+                # Send the ICO data with caching headers
+                cl.send(b"HTTP/1.1 200 OK\r\n")
+                cl.send(b"Content-Type: image/x-icon\r\n")
+                cl.send(b"Cache-Control: public, max-age=31536000\r\n")  # Cache for 1 year
+                cl.send(b"Connection: close\r\n\r\n")
+                cl.send(favicon_data)
+                cl.close()
+                continue
             cl.sendall(html_page())
-            cl.close()
     except Exception as e:
         log(f"[ERROR] Serve crashed: {e}")
         sys.print_exception(e)
+    finally:
+        s.close()  # Always close the socket when done        
         
 def serve_health_check(ip):
     failure_count = 0
