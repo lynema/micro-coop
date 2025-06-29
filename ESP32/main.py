@@ -250,7 +250,7 @@ Timeout Open (ms): <input name="timeout_open" type="number" value="{timeout_open
 Timeout Close (ms): <input name="timeout_close" type="number" value="{timeout_close}">
 <button type="submit" name="Update Settings" value="1">Update Settings</button>
 </form>
-<p>MCU Internal Temperature: <b>{internal_temperature}</b></p>
+<p>MCU Internal Temperature: <b>{internal_temperature}°F</b></p>
 <p>Door: <b>{motor_controller.door_state}</b></p>
 <p>Current Current: <b>{current_current} mV</b></p>
 <p>Last Highest Average Current:<b>{motor_controller.last_higest_average_mv} mV</b></p>

@@ -40,7 +40,7 @@ class MotorController:
 
     def motor_open(self):
         """Opens the motor (moves in one direction)."""
-        self.IN1.duty_u16(52768)
+        self.IN1.duty_u16(32768)
         self.IN2.duty_u16(0)
         self.L_EN.value(1)
         self.R_EN.value(1)
@@ -48,7 +48,7 @@ class MotorController:
     def motor_close(self):
         """Closes the motor (moves in the opposite direction)."""
         self.IN1.duty_u16(0)
-        self.IN2.duty_u16(52768)
+        self.IN2.duty_u16(32768)
         self.L_EN.value(1)
         self.R_EN.value(1)
 
