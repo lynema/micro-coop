@@ -250,10 +250,10 @@ Timeout Open (ms): <input name="timeout_open" type="number" value="{timeout_open
 Timeout Close (ms): <input name="timeout_close" type="number" value="{timeout_close}">
 <button type="submit" name="Update Settings" value="1">Update Settings</button>
 </form>
-<p>MCU Internal Temperature: <b>{internal_temperature}°F</b></p>
+<p>MCU Internal Temperature: <b>{internal_temperature}F</b></p>
 <p>Door: <b>{motor_controller.door_state}</b></p>
 <p>Current Current: <b>{current_current} mV</b></p>
-<p>Last Highest Average Current:<b>{motor_controller.last_higest_average_mv} mV</b></p>
+<p>Last Highest Average Current:<b> {motor_controller.last_higest_average_mv} mV</b></p>
 <p>Local Date and Time: <b>{date_str} {local_time_str}</b></p>
 <p>Local Time Seconds: <b>{local_time_seconds}</b></p>
 <p>Sunrise (Door opens between 10m before and 10m after): <b>{sunrise_str}</b></p>
@@ -282,63 +282,63 @@ def serve():
         log("[INFO] Web server started on port 80")
         while True:
             cl, addr = s.accept()
-            req = cl.recv(1024).decode()
+            try:
+                req = cl.recv(1024).decode()
 
-            if 'GET /?' in req:
-                if 'action=open' in req:
-                    log("[INFO] Sending open")
-                    send_uart("open")
-                elif 'action=close' in req:
-                    log("[INFO] Sending close")
-                    send_uart("close")
-                elif 'action=stop' in req:
-                    log("[INFO] Sending stop")
-                    send_uart("stop")
-                elif 'action=sync' in req:
-                    sync_time()
-                elif 'action=failsafe' in req:
-                    FAILSAFE = not FAILSAFE
-                # Only update settings if submit button was clicked
-                if 'Update+Settings' in req:
-                    if 'threshold=' in req:
-                        try:
-                            val = int(req.split("threshold=")[1].split("&")[0])
-                            if val != motor_config.get("current_threshold"): send_uart(f"threshold:{val}")
-                        except: pass
-                    if 'timeout_open=' in req:
-                        try:
-                            val = int(req.split("timeout_open=")[1].split("&")[0])
-                            if val != motor_config.get("timeout_open"): send_uart(f"timeout_open:{val}")
-                        except: pass
-                    if 'timeout_close=' in req:
-                        try:
-                            val = int(req.split("timeout_close=")[1].split("&")[0])
-                            if val != motor_config.get("timeout_close"): send_uart(f"timeout_close:{val}")
-                        except: pass
-                    #fetch_motor_config()
-                cl.send("HTTP/1.0 302 Found\r\nLocation: /\r\n\r\n")
+                if 'GET /?' in req:
+                    if 'action=open' in req:
+                        log("[INFO] Sending open")
+                        send_uart("open")
+                    elif 'action=close' in req:
+                        log("[INFO] Sending close")
+                        send_uart("close")
+                    elif 'action=stop' in req:
+                        log("[INFO] Sending stop")
+                        send_uart("stop")
+                    elif 'action=sync' in req:
+                        sync_time()
+                    elif 'action=failsafe' in req:
+                        FAILSAFE = not FAILSAFE
+                    # Only update settings if submit button was clicked
+                    if 'Update+Settings' in req:
+                        if 'threshold=' in req:
+                            try:
+                                val = int(req.split("threshold=")[1].split("&")[0])
+                                if val != motor_config.get("current_threshold"): send_uart(f"threshold:{val}")
+                            except: pass
+                        if 'timeout_open=' in req:
+                            try:
+                                val = int(req.split("timeout_open=")[1].split("&")[0])
+                                if val != motor_config.get("timeout_open"): send_uart(f"timeout_open:{val}")
+                            except: pass
+                        if 'timeout_close=' in req:
+                            try:
+                                val = int(req.split("timeout_close=")[1].split("&")[0])
+                                if val != motor_config.get("timeout_close"): send_uart(f"timeout_close:{val}")
+                            except: pass
+                        #fetch_motor_config()
+                    cl.send("HTTP/1.0 302 Found\r\nLocation: /\r\n\r\n")
+                    continue
 
-            elif 'GET /status' in req:
-                cl.send("HTTP/1.0 200 OK\r\nContent-Type: application/json\r\n\r\n")
-                cl.send(json.dumps({"door": motor_controller.door_state, "current_mv": current_sensor.get_current_ma()}))
-                cl.close()
-                continue
+                elif 'GET /status' in req:
+                    cl.send("HTTP/1.0 200 OK\r\nContent-Type: application/json\r\n\r\n")
+                    cl.send(json.dumps({"door": motor_controller.door_state, "current_mv": current_sensor.get_current_ma()}))
+                    continue
 
-            elif 'GET /ping' in req:
-                cl.send("HTTP/1.0 200 OK\r\nContent-Type: text/plain\r\n\r\n")
-                cl.send("pong")
+                elif 'GET /ping' in req:
+                    cl.send("HTTP/1.0 200 OK\r\nContent-Type: text/plain\r\n\r\npong")
+                    continue
+                elif 'GET /favicon.ico' in req:
+                    # Send the ICO data with caching headers
+                    cl.send(b"HTTP/1.1 200 OK\r\n")
+                    cl.send(b"Content-Type: image/x-icon\r\n")
+                    cl.send(b"Cache-Control: public, max-age=31536000\r\n")  # Cache for 1 year
+                    cl.send(b"Connection: close\r\n\r\n")
+                    cl.send(favicon_data)
+                    continue
+                cl.sendall(html_page())
+            finally:
                 cl.close()
-                continue
-            elif 'GET /favicon.ico' in req:
-                # Send the ICO data with caching headers
-                cl.send(b"HTTP/1.1 200 OK\r\n")
-                cl.send(b"Content-Type: image/x-icon\r\n")
-                cl.send(b"Cache-Control: public, max-age=31536000\r\n")  # Cache for 1 year
-                cl.send(b"Connection: close\r\n\r\n")
-                cl.send(favicon_data)
-                cl.close()
-                continue
-            cl.sendall(html_page())
     except Exception as e:
         log(f"[ERROR] Serve crashed: {e}")
         sys.print_exception(e)
@@ -354,17 +354,16 @@ def serve_health_check(ip):
             sock.connect((ip, 80))
             sock.send(b"GET /ping HTTP/1.1\r\nHost: %s\r\n\r\n" % ip.encode())
             response = sock.recv(1024)
-            pong = sock.recv(1024)
+            #print(f"response {response}")
             sock.close()
-            
-            if b"pong" in pong:
+            if b"pong" in response:
                 return True
-            else:
-                return False
+            asyncio.sleep(2)
         except Exception as e:
             return False
         finally:
             failure_count+=1
+    return False
     
         
 async def check_serve_health():
