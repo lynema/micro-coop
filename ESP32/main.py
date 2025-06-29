@@ -354,15 +354,16 @@ def serve_health_check(ip):
             sock.connect((ip, 80))
             sock.send(b"GET /ping HTTP/1.1\r\nHost: %s\r\n\r\n" % ip.encode())
             response = sock.recv(1024)
+            #print(f"response {response}")
             sock.close()
             if b"pong" in response:
                 return True
-            else:
-                return False
+            asyncio.sleep(2)
         except Exception as e:
             return False
         finally:
             failure_count+=1
+    return False
     
         
 async def check_serve_health():
