@@ -7,6 +7,7 @@ from sun_data_utils import build_month_cache, load_sun_data, manage_cache, max_c
 import uasyncio as asyncio
 import sys
 import esp32
+import gc
 
 from motor_controller import MotorController
 from current_sensor import CurrentSensor
@@ -16,6 +17,7 @@ from neo_pixel import NeoPixelController
 log_buffer = []
 MAX_LOG_LINES = 45
 FAILSAFE=True
+HTML_SERVER_RUNNING=False
 
 FAILSAFE_OPEN_TO_CLOSED = 22 * 3600 + 30 * 60   # 10:30 PM
 FAILSAFE_CLOSED_TO_OPEN = 8 * 3600             # 8:00 AM
@@ -25,6 +27,9 @@ wdt = machine.WDT(timeout=90000)
 # Track recent door action status with a timer flag
 recent_action_flag = False
 recent_action_timer = None
+
+def disable_deep_sleep():
+    machine.deepsleep(0)  # Disable deep sleep completely in this case
 
 def log(msg):
     timestamp = time.localtime()
@@ -174,6 +179,7 @@ def send_uart(line, retry_count=0, log_response=True):
 
 # --- NETWORK ---
 def connect_wifi():
+    global HTML_SERVER_RUNNING
     wlan = network.WLAN(network.STA_IF)
     wlan.active(True)
     if not wlan.isconnected():
@@ -182,6 +188,10 @@ def connect_wifi():
       while not wlan.isconnected() and timeout > 0:
           time.sleep(1)
           timeout -= 1
+    if wlan.isconnected() and not HTML_SERVER_RUNNING:
+        import _thread
+        _thread.start_new_thread(serve, ())
+        HTML_SERVER_RUNNING = True
     return wlan.ifconfig()[0] if wlan.isconnected() else None
 
 # --- DOOR AUTOMATION ---
@@ -250,7 +260,7 @@ Timeout Open (ms): <input name="timeout_open" type="number" value="{timeout_open
 Timeout Close (ms): <input name="timeout_close" type="number" value="{timeout_close}">
 <button type="submit" name="Update Settings" value="1">Update Settings</button>
 </form>
-<p>MCU Internal Temperature: <b>{internal_temperature}F</b></p>
+<p>MCU Temp: <b>{internal_temperature}F</b> Last Reset:<b>{machine.reset_cause()}</b> Free Mem: <b>{gc.mem_free()}</b></p>
 <p>Door: <b>{motor_controller.door_state}</b></p>
 <p>Current Current: <b>{current_current} mV</b></p>
 <p>Last Highest Average Current:<b> {motor_controller.last_higest_average_mv} mV</b></p>
@@ -358,10 +368,10 @@ def serve_health_check(ip):
             sock.close()
             if b"pong" in response:
                 return True
-            asyncio.sleep(2)
         except Exception as e:
             return False
         finally:
+            asyncio.sleep(2)
             failure_count+=1
     return False
     
@@ -388,7 +398,9 @@ async def task_time_sync(now):
           
 # --- MAIN ---
 async def main():
+    print(f"Startup, last reset cause: {machine.reset_cause()}")
     wdt.feed()
+    #disable_deep_sleep()
     np.show_color((255,0,0))
     ip = connect_wifi()
     if ip:
@@ -396,6 +408,7 @@ async def main():
         print(f"[INFO] Connected to Wi-Fi: {ip}")
         sync_time()
         await manage_cache(time.localtime(), LAT, LNG, log)
+
     else:
         log("[WARN] Wi-Fi connection failed. Running in offline mode.")
     log(f"[INFO] Web UI at http://{ip}")
@@ -403,8 +416,6 @@ async def main():
 
     time.sleep(5)
 
-    import _thread
-    _thread.start_new_thread(serve, ())
 
     while True:
         np.random_color()
