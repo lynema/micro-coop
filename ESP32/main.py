@@ -7,15 +7,22 @@ from sun_data_utils import build_month_cache, load_sun_data, manage_cache, max_c
 import uasyncio as asyncio
 import sys
 import esp32
+import gc
+from ds3231_gen import *
 
 from motor_controller import MotorController
 from current_sensor import CurrentSensor
 from neo_pixel import NeoPixelController
 
 # --- LOGGING BUFFER ---
+ 
+  
+   
+   
 log_buffer = []
 MAX_LOG_LINES = 45
 FAILSAFE=True
+HTML_SERVER_RUNNING=False
 
 FAILSAFE_OPEN_TO_CLOSED = 22 * 3600 + 30 * 60   # 10:30 PM
 FAILSAFE_CLOSED_TO_OPEN = 8 * 3600             # 8:00 AM
@@ -25,6 +32,9 @@ wdt = machine.WDT(timeout=90000)
 # Track recent door action status with a timer flag
 recent_action_flag = False
 recent_action_timer = None
+
+def disable_deep_sleep():
+    machine.deepsleep(0)  # Disable deep sleep completely in this case
 
 def log(msg):
     timestamp = time.localtime()
@@ -85,6 +95,17 @@ motor_controller = MotorController(
 
 np = NeoPixelController(brightness=0.1)
 
+
+#i2c = SoftI2C(scl=Pin(2, Pin.OPEN_DRAIN, value=1), sda=Pin(1, Pin.OPEN_DRAIN, value=1))
+rtc_ds = None
+try:
+    rtc_ds = DS3231(i2c)
+except Exception as e:
+    log(f"[ERROR] Unexpected: {e}")
+    print(f"[ERROR] Unexpected: {e}")
+    sys.print_exception(e)
+
+
 def reset_recent_action_flag(_=None):
     global recent_action_flag
     recent_action_flag = False
@@ -103,14 +124,15 @@ def start_recent_action_timer():
 # UART to RP2040 #uart = UART(1, baudrate=38400, tx=7, rx=6, cts=5, rts=4)
 
 LAST_NTP_SYNC_MDAY = 0
-rtc = RTC()
+rtc_sys = RTC()
 
 def sync_time():
     global config, LAST_NTP_SYNC_MDAY
     try:
         ntptime.settime()
         tm = time.localtime(time.time() + get_est_offset())
-        rtc.datetime((tm[0], tm[1], tm[2], tm[6], tm[3], tm[4], tm[5], 0))
+        rtc_sys.datetime((tm[0], tm[1], tm[2], tm[6], tm[3], tm[4], tm[5], 0))
+        if rtc_ds: rtc_ds.set_time(tm)
         last_ntp_sync = f"{tm[0]:04d}-{tm[1]:02d}-{tm[2]:02d} {tm[3]:02d}:{tm[4]:02d}:{tm[5]:02d}"
         LAST_NTP_SYNC_MDAY = tm[2]
         log("[INFO] Time synced successfully")
@@ -118,6 +140,12 @@ def sync_time():
     except Exception as e:
         log(f"[ERROR] NTP sync failed: {e}")
         return False
+    
+    
+def restore_time_from_ds3231():
+    tm = rtc_ds.get_time()  # (year, month, mday, hour, min, sec, wday, yday)
+    rtc_sys.datetime((tm[0], tm[1], tm[2], tm[6], tm[3], tm[4], tm[5], 0))
+    log("[INFO] System time restored from DS3231")
     
 def run_motor_thread(action):
     motor_controller.safe_move(action, log)
@@ -173,16 +201,23 @@ def send_uart(line, retry_count=0, log_response=True):
             log("invalid timeout close\n")
 
 # --- NETWORK ---
-def connect_wifi():
-    wlan = network.WLAN(network.STA_IF)
-    wlan.active(True)
-    if not wlan.isconnected():
-      wlan.connect(SSID, PASSWORD)
-      timeout = 10
-      while not wlan.isconnected() and timeout > 0:
+def connect_wifi(wifi):
+    global HTML_SERVER_RUNNING
+    if not wifi.isconnected():
+      wifi.active(False)
+      time.sleep(0.5)
+      wifi.active(True)
+      time.sleep(0.5)
+      wifi.connect(SSID, PASSWORD)
+      timeout = 6
+      while not wifi.isconnected() and timeout > 0:
           time.sleep(1)
           timeout -= 1
-    return wlan.ifconfig()[0] if wlan.isconnected() else None
+    if wifi.isconnected() and not HTML_SERVER_RUNNING:
+        import _thread
+        _thread.start_new_thread(serve, ())
+        HTML_SERVER_RUNNING = True
+    return wifi.ifconfig()[0] if wifi.isconnected() else None
 
 # --- DOOR AUTOMATION ---
 def auto_check(now_sec, sunrise_sec, sunset_sec):
@@ -236,6 +271,8 @@ def html_page():
         current_current = current_sensor.get_current_ma()
     log_html = '<br>'.join(log_buffer[::-1])
     internal_temperature = (esp32.mcu_temperature() * 9 / 5) + 32
+    ds_temerature = (rtc_ds.temperature() * 9 / 5) + 32
+    free_memory = gc.mem_free() / 1024
     return f"""<!DOCTYPE html><html><body>
 <h2>Auto Coop Door</h2>
 <form action="/" method="get">
@@ -250,7 +287,8 @@ Timeout Open (ms): <input name="timeout_open" type="number" value="{timeout_open
 Timeout Close (ms): <input name="timeout_close" type="number" value="{timeout_close}">
 <button type="submit" name="Update Settings" value="1">Update Settings</button>
 </form>
-<p>MCU Internal Temperature: <b>{internal_temperature}F</b></p>
+<p>MCU Temp: <b>{internal_temperature}F</b> DS3231 Temp: <b>{ds_temerature}F</b></p>
+<p>Last Reset:<b>{machine.reset_cause()}</b> Free Mem: <b>{free_memory}KB</b></p>
 <p>Door: <b>{motor_controller.door_state}</b></p>
 <p>Current Current: <b>{current_current} mV</b></p>
 <p>Last Highest Average Current:<b> {motor_controller.last_higest_average_mv} mV</b></p>
@@ -358,16 +396,15 @@ def serve_health_check(ip):
             sock.close()
             if b"pong" in response:
                 return True
-            asyncio.sleep(2)
         except Exception as e:
             return False
         finally:
+            time.sleep(2)
             failure_count+=1
     return False
     
         
-async def check_serve_health():
-    ip = connect_wifi()
+async def check_serve_health(ip):
     if ip:
         if not serve_health_check(ip):
             log("log Website is down. Restarting...")
@@ -388,39 +425,58 @@ async def task_time_sync(now):
           
 # --- MAIN ---
 async def main():
+    print(f"Startup, last reset cause: {machine.reset_cause()}")
+    wlan = network.WLAN(network.STA_IF)
+    #OSError: Wifi Invalid Mode
+    #wlan.config(pm=wlan.PM_NONE)
+
     wdt.feed()
+    if rtc_ds:
+        restore_time_from_ds3231()
+    #disable_deep_sleep()
     np.show_color((255,0,0))
-    ip = connect_wifi()
-    if ip:
-        log(f"[INFO] Connected to Wi-Fi: {ip}")
-        print(f"[INFO] Connected to Wi-Fi: {ip}")
-        sync_time()
-        await manage_cache(time.localtime(), LAT, LNG, log)
-    else:
-        log("[WARN] Wi-Fi connection failed. Running in offline mode.")
-    log(f"[INFO] Web UI at http://{ip}")
-    #fetch_motor_config()
+    ip = None
+    try:
+        ip = connect_wifi(wlan)
+        if ip:
+            log(f"[INFO] Connected to Wi-Fi: {ip}")
+            print(f"[INFO] Connected to Wi-Fi: {ip}")
+            sync_time()
+            await manage_cache(time.localtime(), LAT, LNG, log)
+
+        else:
+            log("[WARN] Wi-Fi connection failed. Running in offline mode.")
+        log(f"[INFO] Web UI at http://{ip}")
+        #fetch_motor_config()
+    except Exception as e:
+        log(f"[ERROR] Cannot initilize wifi: {e}")
+        print(f"[ERROR] Cannot initilize wifi: {e}")
+        sys.print_exception(e)
 
     time.sleep(5)
+    if rtc_ds: print(f"temp {rtc_ds.temperature()}")
 
-    import _thread
-    _thread.start_new_thread(serve, ())
 
     while True:
         np.random_color()
-        ip = connect_wifi()
         try:
             wdt.feed()
             #await update_status()
             now = time.localtime()
+            
             tasks = [
-                auto_door_check(now),
+                auto_door_check(now)
+                ]
+            if ip:
+                tasks.extend([
                 task_time_sync(now),
                 manage_cache(now, LAT, LNG, log),
-                check_serve_health()
-            ]
+                check_serve_health(ip)])
+            
             await asyncio.gather(*tasks)
-            await asyncio.sleep(5)
+            ip = connect_wifi(wlan)
+            await asyncio.sleep(7)
+        
 
         except MemoryError:
             machine.reset()
@@ -428,4 +484,5 @@ async def main():
             log(f"[ERROR] Unexpected: {e}")
             print(f"[ERROR] Unexpected: {e}")
             sys.print_exception(e)
+            await asyncio.sleep(7)
 asyncio.run(main())
