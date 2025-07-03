@@ -1,24 +1,24 @@
 {
-  "current_threshold": 900,
-  "move_timeout_open_ms": 40000,
-  "move_timeout_close_ms": 40000,
+  "current_threshold": 550,
+  "move_timeout_open_ms": 55000,
+  "move_timeout_close_ms": 55000,
   "pin": {
-    "ina": {
-      "sda": 1,
-      "sdc": 2
+    "i2c": {
+      "sda": 41,
+      "sdc": 42
     },
     "ibt": {
       "in1": 4,
       "in2": 5,
       "l_en": 40,
-      "r_en": 41
-    },
-    "relay": {
-      "light": 18,
-      "heat": 17
+      "r_en": 39
     },
     "temp": {
       "data": 13
-    } 
+    },
+    "relay": {
+      "light": 18,
+      "heat" :17
+    }    
   }
 }

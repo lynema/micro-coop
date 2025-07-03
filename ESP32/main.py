@@ -8,17 +8,15 @@ import uasyncio as asyncio
 import sys
 import esp32
 import gc
-from ds3231_gen import *
 
+from ds3231_gen import *
 from motor_controller import MotorController
 from current_sensor import CurrentSensor
 from neo_pixel import NeoPixelController
+from temperature_sensor import DS18B20Sensor
+from relay_controller import Relay
 
-# --- LOGGING BUFFER ---
- 
-  
-   
-   
+DEBUG = True
 log_buffer = []
 MAX_LOG_LINES = 45
 FAILSAFE=True
@@ -69,17 +67,22 @@ def get_pins(config, device, required_keys):
         pins[key] = device_pins[key]
     return pins
 
-ina_pins = {}
+i2c_pins = {}
 ibt_pins = {}
+temp_pins = {}
+relay_pins = {}
 
 try:
-    ina_pins = get_pins(motor_config, "ina", ["sda", "sdc"])
+    i2c_pins = get_pins(motor_config, "i2c", ["sda", "sdc"])
     ibt_pins = get_pins(motor_config, "ibt", ["in1", "in2", "l_en", "r_en"])
+    temp_pins = get_pins(motor_config, "temp", ["data"])
+    relay_pins = get_pins(motor_config, "relay", ["light", "heat"])
+    
 except ValueError as e:
     print("Configuration error:", e)
     
 #t-picoc3 i2c = I2C(0, sda=Pin(24), scl=Pin(21))
-i2c = I2C(0, sda=Pin(ina_pins["sda"], Pin.OUT), scl=Pin(ina_pins["sdc"], Pin.OUT), freq=10000) 
+i2c = I2C(0, sda=Pin(i2c_pins["sda"], Pin.OUT), scl=Pin(i2c_pins["sdc"], Pin.OUT), freq=10000) 
 current_sensor = None
 try:
     current_sensor = CurrentSensor(i2c)
@@ -100,11 +103,30 @@ np = NeoPixelController(brightness=0.1)
 rtc_ds = None
 try:
     rtc_ds = DS3231(i2c)
+    time.sleep(0.5)
+    rtc_ds.get_time()
 except Exception as e:
-    log(f"[ERROR] Unexpected: {e}")
-    print(f"[ERROR] Unexpected: {e}")
+    rtc_ds = None
+    log(f"[ERROR] RTC_DS init: {e}")
+    print(f"[ERROR] RTC_DS init: {e}")
+    sys.print_exception(e)
+    
+temp_ds = None
+try:
+    temp_ds = DS18B20Sensor(data_pin_num=temp_pins["data"])
+except Exception as e:
+    temp_ds = None
+    log(f"[ERROR] TEMP_DS: {e}")
+    print(f"[ERROR] TEMP_DS: {e}")
     sys.print_exception(e)
 
+heat = None
+light = None
+heat = Relay("heat", relay_pins["heat"])
+light = Relay("light", relay_pins["light"])
+
+
+#for pin in relay_pins:
 
 def reset_recent_action_flag(_=None):
     global recent_action_flag
@@ -154,7 +176,7 @@ def run_motor_thread(action):
 def send_uart(line, retry_count=0, log_response=True):
     if line in ("open", "close"):
             _thread.start_new_thread(run_motor_thread, (line,))
-            log("ack\n")
+            return("ack\n")
     elif line == "stop":
         motor_controller.motor_stop()
         return ("ack\n")
@@ -214,9 +236,9 @@ def connect_wifi(wifi):
           time.sleep(1)
           timeout -= 1
     if wifi.isconnected() and not HTML_SERVER_RUNNING:
-        import _thread
         _thread.start_new_thread(serve, ())
         HTML_SERVER_RUNNING = True
+        log(f"[INFO] Web UI starting at http://{wifi.ifconfig()[0]}")
     return wifi.ifconfig()[0] if wifi.isconnected() else None
 
 # --- DOOR AUTOMATION ---
@@ -271,7 +293,8 @@ def html_page():
         current_current = current_sensor.get_current_ma()
     log_html = '<br>'.join(log_buffer[::-1])
     internal_temperature = (esp32.mcu_temperature() * 9 / 5) + 32
-    ds_temerature = (rtc_ds.temperature() * 9 / 5) + 32
+    ds_temperature = (rtc_ds.temperature() * 9 / 5) + 32 if rtc_ds else None
+    out_ds_temperature = temp_ds.read_fahrenheit() if temp_ds else None
     free_memory = gc.mem_free() / 1024
     return f"""<!DOCTYPE html><html><body>
 <h2>Auto Coop Door</h2>
@@ -287,7 +310,11 @@ Timeout Open (ms): <input name="timeout_open" type="number" value="{timeout_open
 Timeout Close (ms): <input name="timeout_close" type="number" value="{timeout_close}">
 <button type="submit" name="Update Settings" value="1">Update Settings</button>
 </form>
-<p>MCU Temp: <b>{internal_temperature}F</b> DS3231 Temp: <b>{ds_temerature}F</b></p>
+<p>
+MCU Temp: <b>{internal_temperature}F</b>
+ DS3231 Temp: <b>{ds_temperature}F</b>
+ DS18X20 Temp: <b>{out_ds_temperature}F</b>
+</p>
 <p>Last Reset:<b>{machine.reset_cause()}</b> Free Mem: <b>{free_memory}KB</b></p>
 <p>Door: <b>{motor_controller.door_state}</b></p>
 <p>Current Current: <b>{current_current} mV</b></p>
@@ -423,19 +450,13 @@ async def task_time_sync(now):
           log(f"[INFO] Attempting scheduled time sync for mday {now[2]}")
           sync_time()
           
-# --- MAIN ---
 async def main():
     print(f"Startup, last reset cause: {machine.reset_cause()}")
-    wlan = network.WLAN(network.STA_IF)
-    #OSError: Wifi Invalid Mode
-    #wlan.config(pm=wlan.PM_NONE)
-
     wdt.feed()
-    if rtc_ds:
-        restore_time_from_ds3231()
-    #disable_deep_sleep()
+    if rtc_ds: restore_time_from_ds3231()
     np.show_color((255,0,0))
     ip = None
+    wlan = network.WLAN(network.STA_IF)
     try:
         ip = connect_wifi(wlan)
         if ip:
@@ -446,16 +467,21 @@ async def main():
 
         else:
             log("[WARN] Wi-Fi connection failed. Running in offline mode.")
-        log(f"[INFO] Web UI at http://{ip}")
-        #fetch_motor_config()
     except Exception as e:
         log(f"[ERROR] Cannot initilize wifi: {e}")
         print(f"[ERROR] Cannot initilize wifi: {e}")
         sys.print_exception(e)
 
     time.sleep(5)
-    if rtc_ds: print(f"temp {rtc_ds.temperature()}")
-
+    if DEBUG:
+        try:
+            if rtc_ds: print(f"rtc_ds {rtc_ds.temperature()}")
+            if current_sensor: print(f"current_sensor {current_sensor.get_current_ma()}")
+            if temp_ds: print(f"temp_ds: {temp_ds.read_fahrenheit()}")
+        except Exception as e:
+            log(f"[ERROR] Debug Sensor: {e}")
+            print(f"[ERROR] Debug Sensor: {e}")
+            sys.print_exception(e)
 
     while True:
         np.random_color()
