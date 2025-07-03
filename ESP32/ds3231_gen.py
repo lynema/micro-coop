@@ -69,6 +69,7 @@ class DS3231:
         self.alarm1 = Alarm(self, 1)
         self.alarm2 = Alarm(self, 2)
         if _ADDR not in self.ds3231.scan():
+            print("device not found")
             raise RuntimeError(f"DS3231 not found on I2C bus at {_ADDR}")
 
     def get_time(self, data=bytearray(7)):
