@@ -3,7 +3,7 @@ import neopixel
 import urandom
 
 class NeoPixelController:
-    def __init__(self, pin_num=48, num_pixels=1, brightness=1.0):
+    def __init__(self, pin_num, num_pixels=1, brightness=1.0):
         self.pin = machine.Pin(pin_num, machine.Pin.OUT)
         self.num_pixels = num_pixels
         self.brightness = max(0, min(brightness, 1.0))  # Clamp between 0 and 1

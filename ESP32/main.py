@@ -25,7 +25,7 @@ HTML_SERVER_RUNNING=False
 FAILSAFE_OPEN_TO_CLOSED = 22 * 3600 + 30 * 60   # 10:30 PM
 FAILSAFE_CLOSED_TO_OPEN = 8 * 3600             # 8:00 AM
 
-wdt = machine.WDT(timeout=90000)
+wdt = machine.WDT(timeout=30000)
 
 # Track recent door action status with a timer flag
 recent_action_flag = False
@@ -71,18 +71,23 @@ i2c_pins = {}
 ibt_pins = {}
 temp_pins = {}
 relay_pins = {}
+neo_pixel_pins = {}
 
 try:
     i2c_pins = get_pins(motor_config, "i2c", ["sda", "sdc"])
     ibt_pins = get_pins(motor_config, "ibt", ["in1", "in2", "l_en", "r_en"])
     temp_pins = get_pins(motor_config, "temp", ["data"])
     relay_pins = get_pins(motor_config, "relay", ["light", "heat"])
+    neo_pixel_pins = get_pins(motor_config, "pixel", ["din"])
+
     
 except ValueError as e:
     print("Configuration error:", e)
     
 #t-picoc3 i2c = I2C(0, sda=Pin(24), scl=Pin(21))
-i2c = I2C(0, sda=Pin(i2c_pins["sda"], Pin.OUT), scl=Pin(i2c_pins["sdc"], Pin.OUT), freq=10000) 
+#i2c = I2C(0, sda=Pin(i2c_pins["sda"], Pin.OUT), scl=Pin(i2c_pins["sdc"], Pin.OUT), freq=10000) 
+i2c = I2C(0, sda=Pin(i2c_pins["sda"]), scl=Pin(i2c_pins["sdc"]), freq=100000) 
+
 current_sensor = None
 try:
     current_sensor = CurrentSensor(i2c)
@@ -96,10 +101,8 @@ motor_controller = MotorController(
     move_timeout_close_ms=motor_config["move_timeout_close_ms"], current_threshold=motor_config["current_threshold"]
 )
 
-np = NeoPixelController(brightness=0.1)
+np = NeoPixelController(neo_pixel_pins["din"], brightness=0.1)
 
-
-#i2c = SoftI2C(scl=Pin(2, Pin.OPEN_DRAIN, value=1), sda=Pin(1, Pin.OPEN_DRAIN, value=1))
 rtc_ds = None
 try:
     rtc_ds = DS3231(i2c)
@@ -110,7 +113,7 @@ except Exception as e:
     log(f"[ERROR] RTC_DS init: {e}")
     print(f"[ERROR] RTC_DS init: {e}")
     sys.print_exception(e)
-    
+
 temp_ds = None
 try:
     temp_ds = DS18B20Sensor(data_pin_num=temp_pins["data"])
@@ -122,8 +125,8 @@ except Exception as e:
 
 heat = None
 light = None
-heat = Relay("heat", relay_pins["heat"])
-light = Relay("light", relay_pins["light"])
+heat = Relay("heat", relay_pins["heat"], False)
+light = Relay("light", relay_pins["light"], False)
 
 
 #for pin in relay_pins:
@@ -187,48 +190,38 @@ def send_uart(line, retry_count=0, log_response=True):
         return (f"{current_mv}\n")
     elif line == "config":
         return (json.dumps(MOTOR_CONFIG_FILE) + "\n")
-    elif line.startswith("threshold:"):
-        try:
-            val = int(line.split(":")[1])
-            motor_config["current_threshold"] = val
-            CURRENT_THRESHOLD = val
-            with open(MOTOR_CONFIG_FILE, "w") as f:
-                json.dump(motor_config, f)
-            motor_controller.CURRENT_THRESHOLD = val
-            log("threshold updated\n")
-        except:
-            log("invalid threshold\n")
-    elif line.startswith("timeout_open:"):
-        try:
-            val = int(line.split(":")[1])
-            motor_config["move_timeout_open_ms"] = val
-            MOVE_TIMEOUT_OPEN_MS = val
-            with open(MOTOR_CONFIG_FILE, "w") as f:
-                json.dump(motor_config, f)
-            motor_controller.MOVE_TIMEOUT_OPEN_MS = val
+    else:
+        commands = [
+            "current_threshold",
+            "move_timeout_open_ms",
+            "move_timeout_close_ms",
+            "sun_seconds",
+            "heat_toggle_temp",
+        ]
+        for key in commands:
+            if line.startswith(f"{key}:"):
+                try:
+                    val = int(line.split(":", 1)[1])
+                    motor_config[key] = val
+                    globals()[key.upper()] = val
+                    setattr(motor_controller, key.upper(), val)
 
-            log("timeout open updated\n")
-        except:
-            log("invalid timeout open\n")
-    elif line.startswith("timeout_close:"):
-        try:
-            val = int(line.split(":")[1])
-            motor_config["move_timeout_close_ms"] = val
-            MOVE_TIMEOUT_CLOSE_MS = val
-            with open(MOTOR_CONFIG_FILE, "w") as f:
-                json.dump(motor_config, f)
-            motor_controller.MOVE_TIMEOUT_CLOSE_MS = val
-            log("timeout close updated\n")
-        except:
-            log("invalid timeout close\n")
+                    with open(MOTOR_CONFIG_FILE, "w") as f:
+                        json.dump(motor_config, f)
+                    log(f"{key} updated\n")
+                except Exception as e:
+                    log(f"invalid {key}: {e}\n")
+                break
 
 # --- NETWORK ---
 def connect_wifi(wifi):
     global HTML_SERVER_RUNNING
     if not wifi.isconnected():
+      log("[INFO] attempting wifi connection")
       wifi.active(False)
-      time.sleep(0.5)
+      time.sleep(1)  # Give it a moment
       wifi.active(True)
+      wifi.disconnect()
       time.sleep(0.5)
       wifi.connect(SSID, PASSWORD)
       timeout = 6
@@ -284,13 +277,19 @@ def html_page():
     sunrise_str = sun_data.get(date_str, {}).get('sunrise', 'N/A')
     sunset_str = sun_data.get(date_str, {}).get('sunset', 'N/A')
     sync_time_str = LAST_NTP_SYNC_MDAY
-    threshold = motor_config.get("current_threshold", "N/A")
-    timeout_open = motor_config.get("move_timeout_open_ms", "N/A")
-    timeout_close = motor_config.get("move_timeout_close_ms", "N/A")
+    current_threshold = motor_config.get("current_threshold", "N/A")
+    move_timeout_open_ms = motor_config.get("move_timeout_open_ms", "N/A")
+    move_timeout_close_ms = motor_config.get("move_timeout_close_ms", "N/A")
+    sun_seconds = motor_config.get("sun_seconds", "N/A")
+    heat_toggle_temp = motor_config.get("heat_toggle_temp", "N/A")
+
     max_cache_age = max_cache_age_months(now[0], now[1])
     current_current = "N/A"
     if current_sensor:
         current_current = current_sensor.get_current_ma()
+    heat_status = "ON" if heat.is_on() else "OFF"
+    light_status = "ON" if light.is_on() else "OFF"
+
     log_html = '<br>'.join(log_buffer[::-1])
     internal_temperature = (esp32.mcu_temperature() * 9 / 5) + 32
     ds_temperature = (rtc_ds.temperature() * 9 / 5) + 32 if rtc_ds else None
@@ -303,11 +302,16 @@ def html_page():
 <button name="action" value="close">Close</button>
 <button name="action" value="stop">Stop</button>
 <button name="action" value="sync">Sync Time</button>
-<button name="action" value="failsafe">Toggle FAILSAFE</button>
+<button name="action" value="failsafe">Toggle FAILSAFE from <b>{FAILSAFE}</b></button>
+<button name="action" value="toggle_heat">Toggle Heat from <b>{heat_status}</b></button> 
+<button name="action" value="toggle_light">Toggle Light from <b>{light_status}</b></button> 
+<button name="action" value="reset">Reset()</button>
 <br><br>
-Current Threshold: <input name="threshold" type="number" value="{threshold}">
-Timeout Open (ms): <input name="timeout_open" type="number" value="{timeout_open}">
-Timeout Close (ms): <input name="timeout_close" type="number" value="{timeout_close}">
+Current Threshold: <input name="current_threshold" type="number" value="{current_threshold}">
+Timeout Open (ms): <input name="move_timeout_open_ms" type="number" value="{move_timeout_open_ms}">
+Timeout Close (ms): <input name="move_timeout_close_ms" type="number" value="{move_timeout_close_ms}">
+Seconds of daylight for light (ms): <input name="sun_seconds" type="number" value="{sun_seconds}">
+Heat on below this temp: <input name="heat_toggle_temp" type="number" value="{heat_toggle_temp}">
 <button type="submit" name="Update Settings" value="1">Update Settings</button>
 </form>
 <p>
@@ -326,7 +330,6 @@ MCU Temp: <b>{internal_temperature}F</b>
 <p>Closed to Open Threshold Seconds: <b>{FAILSAFE_CLOSED_TO_OPEN}</b></p>
 <p>Open to Closed Threshold Seconds: <b>{FAILSAFE_OPEN_TO_CLOSED}</b></p>
 <p>Recent Action Cooldown: <b>{recent_action_flag}</b></p>
-<p>Failsafe: <b>{FAILSAFE}</b></p>
 <p>Last Sync Mday: <b>{sync_time_str}</b></p>
 <p>Additional Cached Months: <b>{max_cache_age}</b></p>
 <h3>Logs</h3><div style='font-family:monospace;'>{log_html}</div>
@@ -364,23 +367,22 @@ def serve():
                         sync_time()
                     elif 'action=failsafe' in req:
                         FAILSAFE = not FAILSAFE
+                    elif 'action=toggle_heat' in req:
+                        heat.toggle()
+                    elif 'action=toggle_light' in req:
+                        light.toggle()
+                    elif 'action=reset' in req:
+                        machine.reset()
                     # Only update settings if submit button was clicked
                     if 'Update+Settings' in req:
-                        if 'threshold=' in req:
-                            try:
-                                val = int(req.split("threshold=")[1].split("&")[0])
-                                if val != motor_config.get("current_threshold"): send_uart(f"threshold:{val}")
-                            except: pass
-                        if 'timeout_open=' in req:
-                            try:
-                                val = int(req.split("timeout_open=")[1].split("&")[0])
-                                if val != motor_config.get("timeout_open"): send_uart(f"timeout_open:{val}")
-                            except: pass
-                        if 'timeout_close=' in req:
-                            try:
-                                val = int(req.split("timeout_close=")[1].split("&")[0])
-                                if val != motor_config.get("timeout_close"): send_uart(f"timeout_close:{val}")
-                            except: pass
+                        for key in ["current_threshold", "move_timeout_open_ms", "move_timeout_close_ms", "heat_toggle_temp", "sun_seconds"]:
+                            if f"{key}=" in req:
+                                try:
+                                    val = int(req.split(f"{key}=")[1].split("&")[0])
+                                    if val != motor_config.get(key):
+                                        send_uart(f"{key}:{val}")
+                                except:
+                                    pass                          
                         #fetch_motor_config()
                     cl.send("HTTP/1.0 302 Found\r\nLocation: /\r\n\r\n")
                     continue
@@ -437,12 +439,52 @@ async def check_serve_health(ip):
             log("log Website is down. Restarting...")
             machine.reset()
     
-async def auto_door_check(now):
-    sun_data = load_sun_data()
+async def auto_door_check(now, sun_data):
     now_sec = now[3]*3600 + now[4]*60 + now[5]
     sunrise_sec, sunset_sec = today_times(sun_data)
     if sunrise_sec and sunset_sec:
         auto_check(now_sec, sunrise_sec, sunset_sec)
+        
+async def auto_temp_check(temp_relay):
+    global temp_ds
+    if temp_ds:
+        current_temp = temp_ds.read_fahrenheit()
+        if current_temp < motor_config["heat_toggle_temp"]:
+            if not temp_relay.is_on():
+                temp_relay.on()
+        else:
+            if temp_relay.is_on():
+                temp_relay.off()
+    
+async def auto_light_check(now, light_relay, sun_data):
+    now_seconds = now[3]*3600 + now[4]*60 + now[5]
+    sunrise_sec, sunset_sec = today_times(sun_data)
+
+    desired_daylight = motor_config["sun_seconds"]
+    actual_daylight = sunset_sec - sunrise_sec
+
+    if actual_daylight >= desired_daylight:
+        # Enough natural light for the day, make sure relay is off
+        if light_relay.is_on():
+            light_relay.off()
+        return
+
+    extension = (desired_daylight - actual_daylight) // 2
+    light_on_start_sunrise = sunrise_sec - extension
+    light_on_end_sunrise = sunrise_sec + 300
+
+    light_on_start_sunset = sunset_sec - 300
+    light_on_end_sunset = sunset_sec + extension
+
+    if (light_on_start_sunrise <= now_seconds < light_on_end_sunrise):
+        if not light_relay.is_on():
+            log(f"[INFO] Turning light on for sunrise supplement for {light_on_end-now_seconds} seconds")
+            light_relay.on()
+    elif (light_on_start_sunset <= now_seconds < light_on_end_sunset):
+        if not light_relay.is_on():
+            log(f"[INFO] Turning light on for sunset supplement for {light_on_end_sunset-now_seconds} seconds")
+            light_relay.on()
+
         
 async def task_time_sync(now):
     if now[3] > 3:
@@ -466,7 +508,8 @@ async def main():
             await manage_cache(time.localtime(), LAT, LNG, log)
 
         else:
-            log("[WARN] Wi-Fi connection failed. Running in offline mode.")
+            log(f"[WARN] Wi-Fi connection failed. Running in offline mode. {wlan.status()}")
+            #wlan.ifconfig(('192.168.6.152', '255.255.255.0', '192.168.1.1', '8.8.8.8'))
     except Exception as e:
         log(f"[ERROR] Cannot initilize wifi: {e}")
         print(f"[ERROR] Cannot initilize wifi: {e}")
@@ -489,9 +532,12 @@ async def main():
             wdt.feed()
             #await update_status()
             now = time.localtime()
-            
+            sun_data = load_sun_data()
+
             tasks = [
-                auto_door_check(now)
+                auto_door_check(now, sun_data),
+                auto_temp_check(heat),
+                auto_light_check(now, light,sun_data)
                 ]
             if ip:
                 tasks.extend([
