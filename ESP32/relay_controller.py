@@ -6,38 +6,34 @@ class Relay:
         self.name = name
         self.pin = Pin(pin_num, Pin.OUT)
         self.active_high = active_high
-
-        # Set initial state to OFF
         self.off()
 
     def on(self):
         self.pin.value(1 if self.active_high else 0)
-        print(f"{self.name} ON")
 
     def off(self):
         self.pin.value(0 if self.active_high else 1)
-        print(f"{self.name} OFF")
 
     def toggle(self):
         self.pin.value(not self.pin.value())
-        print(f"{self.name} TOGGLED")
 
     def is_on(self):
         return self.pin.value() == (1 if self.active_high else 0)
 
 if __name__ == "__main__":
     relays = [
-        Relay("Relay1", 18),
-        Relay("Relay2", 17),
-        Relay("Relay3", 16),
-        Relay("Relay4", 15)
+        Relay("Relay1", 19, False),
+        Relay("Relay2", 18, False),
+        #Relay("Relay3", 16, False),
+        #Relay("Relay4", 15, False)
     ]
 
     # Test sequence: turn each on/off with delay
     while True:
+        time.sleep(3)
         for r in relays:
             r.on()
-            time.sleep(0.5)
+            time.sleep(1.5)
             r.off()
-            time.sleep(0.5)
+            time.sleep(1.5)
 
