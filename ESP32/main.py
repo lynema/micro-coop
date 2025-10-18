@@ -151,9 +151,9 @@ def start_recent_action_timer():
 LAST_NTP_SYNC_MDAY = 0
 rtc_sys = RTC()
 
-def get_padding_time(sunset):
+def get_padding_time(sunset_sec):
     global FAILSAFE_OPEN_TO_CLOSED
-    return (FAILSAFE_OPEN_TO_CLOSED - sunset_sec) * .10  if FAILSAFE_OPEN_TO_CLOSED < sunset_sec else 0
+    return (FAILSAFE_OPEN_TO_CLOSED - sunset_sec) * .10  if sunset_sec < FAILSAFE_OPEN_TO_CLOSED else 0
 
 def sync_time():
     global config, LAST_NTP_SYNC_MDAY
@@ -455,7 +455,7 @@ async def auto_temp_check(temp_relay):
     if temp_ds:
         current_temp = temp_ds.read_fahrenheit()
         #turn this back off if the temp is a few degrees over the toggle temp
-        if temp_relay.is_on() and motor_config["heat_toggle_temp"] + 5 < curent_temp:
+        if temp_relay.is_on() and motor_config["heat_toggle_temp"] + 5 < current_temp:
             temp_relay.off()
         elif not temp_relay.is_on() and current_temp < motor_config["heat_toggle_temp"]:
             temp_relay.on()
