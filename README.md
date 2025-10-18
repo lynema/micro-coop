@@ -3,7 +3,7 @@ Some micropython microcontroller work to automate a chicken coop
 
 This project started with a T-PicoC3 from Liligo and then evolved into running on a ESP32-S3-DevKitC-1-N8R2 Development Board.  After experiencing WiFi connection troubles with the S3, it moved to the ESP32-C6.  Currently, the ESP32-C6 is my recommendation.
 
-There is going to be a lot of details that are unneceary and unwanted.  Everything could use a cleanup.  For those getting into microcontrolers, this should provide a decent demo of some functionality they can provide.
+There is going to be a lot of code that are unnecessary and unwanted.  Everything could use a cleanup.  For those getting into microcontrolers, this should provide a decent demo of some functionality they can provide.
 
 # Features
 - Actuates a door at sunrise and sunset
