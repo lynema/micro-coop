@@ -144,12 +144,16 @@ def start_recent_action_timer():
         recent_action_timer.deinit()
 
     recent_action_timer = Timer(0)  # or Timer(1)
-    recent_action_timer.init(mode=Timer.ONE_SHOT, period=240_000, callback=reset_recent_action_flag)  # 4 min
+    recent_action_timer.init(mode=Timer.ONE_SHOT, period=120_000, callback=reset_recent_action_flag)  # 2 min
 
 # UART to RP2040 #uart = UART(1, baudrate=38400, tx=7, rx=6, cts=5, rts=4)
 
 LAST_NTP_SYNC_MDAY = 0
 rtc_sys = RTC()
+
+def get_padding_time(sunset_sec):
+    global FAILSAFE_OPEN_TO_CLOSED
+    return (FAILSAFE_OPEN_TO_CLOSED - sunset_sec) * .10  if sunset_sec < FAILSAFE_OPEN_TO_CLOSED else 0
 
 def sync_time():
     global config, LAST_NTP_SYNC_MDAY
@@ -178,6 +182,7 @@ def run_motor_thread(action):
 # --- UART Interface ---
 def send_uart(line, retry_count=0, log_response=True):
     if line in ("open", "close"):
+            start_recent_action_timer()
             _thread.start_new_thread(run_motor_thread, (line,))
             return("ack\n")
     elif line == "stop":
@@ -243,31 +248,30 @@ def auto_check(now_sec, sunrise_sec, sunset_sec):
     door_state = motor_controller.door_state
     if recent_action_flag:
         return
+            
+    padding = get_padding_time(sunset_sec)
+
     #open 10 minutes before or after sunrise
     if sunrise_sec - 600 < now_sec < sunrise_sec + 600 and door_state != OPEN_STATE:
         log("Opening door at sunrise")
-        start_recent_action_timer()
         send_uart(OPEN_STATE)
-    #close 10-20 minutes after sunset
-    elif sunset_sec + 600 < now_sec < sunset_sec + 1200 and door_state != CLOSE_STATE:
+    #close 10-20 minutes after sunset plus a bit of a buffer if it is before FAILSAFE_OPEN_TO_CLOSED
+    elif sunset_sec + 600 + padding < now_sec < sunset_sec + 1200 + padding and door_state != CLOSE_STATE:
         log("Closing door at sunset")
-        start_recent_action_timer()
         send_uart(CLOSE_STATE)
     # Failsafe logic
     if FAILSAFE:
         if ((now_sec >= FAILSAFE_OPEN_TO_CLOSED and door_state != CLOSE_STATE)
             or (now_sec < sunrise_sec - 600 and door_state != CLOSE_STATE)):
             log("[FAILSAFE] Closing door due to time fallback.")
-            start_recent_action_timer()
             send_uart(CLOSE_STATE)
         elif FAILSAFE_CLOSED_TO_OPEN <= now_sec < sunset_sec and door_state != OPEN_STATE:
             log("[FAILSAFE] Opening door due to time fallback.")
-            start_recent_action_timer()
             send_uart(OPEN_STATE)
-            start_recent_action_timer()
 
 # --- HTML PAGE ---
 def html_page():
+    global FAILSAFE_OPEN_TO_CLOSED
     now = time.localtime()
     date_str = f"{now[0]:04d}-{now[1]:02d}-{now[2]:02d}"
     local_time_str = f"{now[3]:02d}:{now[4]:02d}:{now[5]:02d}"
@@ -275,6 +279,7 @@ def html_page():
     sun_data = load_sun_data()
     sunrise_seconds, sunset_seconds = today_times(sun_data)
     sunrise_str = sun_data.get(date_str, {}).get('sunrise', 'N/A')
+    padding = get_padding_time(sunset_seconds)
     sunset_str = sun_data.get(date_str, {}).get('sunset', 'N/A')
     sync_time_str = LAST_NTP_SYNC_MDAY
     current_threshold = motor_config.get("current_threshold", "N/A")
@@ -326,7 +331,7 @@ MCU Temp: <b>{internal_temperature}F</b>
 <p>Local Date and Time: <b>{date_str} {local_time_str}</b></p>
 <p>Local Time Seconds: <b>{local_time_seconds}</b></p>
 <p>Sunrise (Door opens between 10m before and 10m after): <b>{sunrise_str}</b></p>
-<p>Sunset (Door closes between 10-20m after): <b>{sunset_str}</b></p>
+<p>Sunset (Door closes between 10-20m after plus padding): <b>{sunset_str} {padding}</b></p>
 <p>Closed to Open Threshold Seconds: <b>{FAILSAFE_CLOSED_TO_OPEN}</b></p>
 <p>Open to Closed Threshold Seconds: <b>{FAILSAFE_OPEN_TO_CLOSED}</b></p>
 <p>Recent Action Cooldown: <b>{recent_action_flag}</b></p>
@@ -449,12 +454,12 @@ async def auto_temp_check(temp_relay):
     global temp_ds
     if temp_ds:
         current_temp = temp_ds.read_fahrenheit()
-        if current_temp < motor_config["heat_toggle_temp"]:
-            if not temp_relay.is_on():
-                temp_relay.on()
-        else:
-            if temp_relay.is_on():
-                temp_relay.off()
+        #turn this back off if the temp is a few degrees over the toggle temp
+        if temp_relay.is_on() and motor_config["heat_toggle_temp"] + 5 < current_temp:
+            temp_relay.off()
+        elif not temp_relay.is_on() and current_temp < motor_config["heat_toggle_temp"]:
+            temp_relay.on()
+            
     
 async def auto_light_check(now, light_relay, sun_data):
     now_seconds = now[3]*3600 + now[4]*60 + now[5]
