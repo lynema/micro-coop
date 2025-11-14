@@ -489,7 +489,7 @@ async def auto_light_check(now, light_relay, sun_data):
         if not light_relay.is_on():
             log(f"[INFO] Turning light on for sunset supplement for {light_on_end_sunset-now_seconds} seconds")
             light_relay.on()
-    else
+    else:
         if not light_relay.is_on():
             light_relay.off()
 
