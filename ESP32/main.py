@@ -23,7 +23,7 @@ FAILSAFE=True
 HTML_SERVER_RUNNING=False
 
 FAILSAFE_OPEN_TO_CLOSED = 22 * 3600 + 30 * 60   # 10:30 PM
-FAILSAFE_CLOSED_TO_OPEN = 8 * 3600             # 8:00 AM
+FAILSAFE_CLOSED_TO_OPEN = 7 * 3600             # 7:00 AM
 
 wdt = machine.WDT(timeout=30000)
 
@@ -151,9 +151,10 @@ def start_recent_action_timer():
 LAST_NTP_SYNC_MDAY = 0
 rtc_sys = RTC()
 
-def get_padding_time(sunset_sec):
+def get__sunset_padding_time(sunset_sec):
     global FAILSAFE_OPEN_TO_CLOSED
-    return (FAILSAFE_OPEN_TO_CLOSED - sunset_sec) * .10  if sunset_sec < FAILSAFE_OPEN_TO_CLOSED else 0
+    return (FAILSAFE_OPEN_TO_CLOSED - sunset_sec) * .15  if sunset_sec < FAILSAFE_OPEN_TO_CLOSED else 0
+
 
 def sync_time():
     global config, LAST_NTP_SYNC_MDAY
@@ -249,7 +250,7 @@ def auto_check(now_sec, sunrise_sec, sunset_sec):
     if recent_action_flag:
         return
             
-    padding = get_padding_time(sunset_sec)
+    padding = get__sunset_padding_time(sunset_sec)
 
     #open 10 minutes before or after sunrise
     if sunrise_sec - 600 < now_sec < sunrise_sec + 600 and door_state != OPEN_STATE:
@@ -279,7 +280,7 @@ def html_page():
     sun_data = load_sun_data()
     sunrise_seconds, sunset_seconds = today_times(sun_data)
     sunrise_str = sun_data.get(date_str, {}).get('sunrise', 'N/A')
-    padding = get_padding_time(sunset_seconds)
+    padding = get__sunset_padding_time(sunset_seconds)
     sunset_str = sun_data.get(date_str, {}).get('sunset', 'N/A')
     sync_time_str = LAST_NTP_SYNC_MDAY
     current_threshold = motor_config.get("current_threshold", "N/A")
@@ -477,18 +478,20 @@ async def auto_light_check(now, light_relay, sun_data):
     extension = (desired_daylight - actual_daylight) // 2
     light_on_start_sunrise = sunrise_sec - extension
     light_on_end_sunrise = sunrise_sec + 300
-
     light_on_start_sunset = sunset_sec - 300
     light_on_end_sunset = sunset_sec + extension
 
     if (light_on_start_sunrise <= now_seconds < light_on_end_sunrise):
         if not light_relay.is_on():
-            log(f"[INFO] Turning light on for sunrise supplement for {light_on_end-now_seconds} seconds")
+            log(f"[INFO] Turning light on for sunrise supplement for {light_on_end_sunrise-now_seconds} seconds")
             light_relay.on()
     elif (light_on_start_sunset <= now_seconds < light_on_end_sunset):
         if not light_relay.is_on():
             log(f"[INFO] Turning light on for sunset supplement for {light_on_end_sunset-now_seconds} seconds")
             light_relay.on()
+    else
+        if not light_relay.is_on():
+            light_relay.off()
 
         
 async def task_time_sync(now):
