@@ -15,15 +15,16 @@ from current_sensor import CurrentSensor
 from neo_pixel import NeoPixelController
 from temperature_sensor import DS18B20Sensor
 from relay_controller import Relay
+from door import auto_check
 
 DEBUG = True
 log_buffer = []
-MAX_LOG_LINES = 45
+MAX_LOG_LINES = 60
 FAILSAFE=True
 HTML_SERVER_RUNNING=False
 
 FAILSAFE_OPEN_TO_CLOSED = 22 * 3600 + 30 * 60   # 10:30 PM
-FAILSAFE_CLOSED_TO_OPEN = 8 * 3600             # 8:00 AM
+FAILSAFE_CLOSED_TO_OPEN = 7 * 3600             # 7:00 AM
 
 wdt = machine.WDT(timeout=30000)
 
@@ -151,9 +152,10 @@ def start_recent_action_timer():
 LAST_NTP_SYNC_MDAY = 0
 rtc_sys = RTC()
 
-def get_padding_time(sunset_sec):
+def get_sunset_padding_time(sunset_sec):
     global FAILSAFE_OPEN_TO_CLOSED
-    return (FAILSAFE_OPEN_TO_CLOSED - sunset_sec) * .10  if sunset_sec < FAILSAFE_OPEN_TO_CLOSED else 0
+    return (FAILSAFE_OPEN_TO_CLOSED - sunset_sec) * .33  if sunset_sec < FAILSAFE_OPEN_TO_CLOSED else 0
+
 
 def sync_time():
     global config, LAST_NTP_SYNC_MDAY
@@ -239,35 +241,6 @@ def connect_wifi(wifi):
         log(f"[INFO] Web UI starting at http://{wifi.ifconfig()[0]}")
     return wifi.ifconfig()[0] if wifi.isconnected() else None
 
-# --- DOOR AUTOMATION ---
-def auto_check(now_sec, sunrise_sec, sunset_sec):
-    global recent_action_flag, FAILSAFE
-    OPEN_STATE="open"
-    CLOSE_STATE="close"
-    
-    door_state = motor_controller.door_state
-    if recent_action_flag:
-        return
-            
-    padding = get_padding_time(sunset_sec)
-
-    #open 10 minutes before or after sunrise
-    if sunrise_sec - 600 < now_sec < sunrise_sec + 600 and door_state != OPEN_STATE:
-        log("Opening door at sunrise")
-        send_uart(OPEN_STATE)
-    #close 10-20 minutes after sunset plus a bit of a buffer if it is before FAILSAFE_OPEN_TO_CLOSED
-    elif sunset_sec + 600 + padding < now_sec < sunset_sec + 1200 + padding and door_state != CLOSE_STATE:
-        log("Closing door at sunset")
-        send_uart(CLOSE_STATE)
-    # Failsafe logic
-    if FAILSAFE:
-        if ((now_sec >= FAILSAFE_OPEN_TO_CLOSED and door_state != CLOSE_STATE)
-            or (now_sec < sunrise_sec - 600 and door_state != CLOSE_STATE)):
-            log("[FAILSAFE] Closing door due to time fallback.")
-            send_uart(CLOSE_STATE)
-        elif FAILSAFE_CLOSED_TO_OPEN <= now_sec < sunset_sec and door_state != OPEN_STATE:
-            log("[FAILSAFE] Opening door due to time fallback.")
-            send_uart(OPEN_STATE)
 
 # --- HTML PAGE ---
 def html_page():
@@ -279,7 +252,7 @@ def html_page():
     sun_data = load_sun_data()
     sunrise_seconds, sunset_seconds = today_times(sun_data)
     sunrise_str = sun_data.get(date_str, {}).get('sunrise', 'N/A')
-    padding = get_padding_time(sunset_seconds)
+    padding = get_sunset_padding_time(sunset_seconds)
     sunset_str = sun_data.get(date_str, {}).get('sunset', 'N/A')
     sync_time_str = LAST_NTP_SYNC_MDAY
     current_threshold = motor_config.get("current_threshold", "N/A")
@@ -445,10 +418,15 @@ async def check_serve_health(ip):
             machine.reset()
     
 async def auto_door_check(now, sun_data):
+    global recent_action_flag, FAILSAFE, FAILSAFE_CLOSED_TO_OPEN, FAILSAFE_OPEN_TO_CLOSED
     now_sec = now[3]*3600 + now[4]*60 + now[5]
     sunrise_sec, sunset_sec = today_times(sun_data)
-    if sunrise_sec and sunset_sec:
-        auto_check(now_sec, sunrise_sec, sunset_sec)
+    if sunrise_sec and sunset_sec and not recent_action_flag:
+        desired_door_state = auto_check(now_sec, sunrise_sec, sunset_sec + get_sunset_padding_time(sunset_sec)
+, FAILSAFE, FAILSAFE_CLOSED_TO_OPEN, FAILSAFE_OPEN_TO_CLOSED)
+        if desired_door_state != None and desired_door_state[0] != motor_controller.door_state:
+            send_uart(desired_door_state[0])
+            log(desired_door_state[1])
         
 async def auto_temp_check(temp_relay):
     global temp_ds
@@ -464,6 +442,7 @@ async def auto_temp_check(temp_relay):
 async def auto_light_check(now, light_relay, sun_data):
     now_seconds = now[3]*3600 + now[4]*60 + now[5]
     sunrise_sec, sunset_sec = today_times(sun_data)
+    padding = get_sunset_padding_time(sunset_sec)
 
     desired_daylight = motor_config["sun_seconds"]
     actual_daylight = sunset_sec - sunrise_sec
@@ -477,19 +456,21 @@ async def auto_light_check(now, light_relay, sun_data):
     extension = (desired_daylight - actual_daylight) // 2
     light_on_start_sunrise = sunrise_sec - extension
     light_on_end_sunrise = sunrise_sec + 300
-
     light_on_start_sunset = sunset_sec - 300
-    light_on_end_sunset = sunset_sec + extension
+    light_on_end_sunset = sunset_sec + extension + padding
 
     if (light_on_start_sunrise <= now_seconds < light_on_end_sunrise):
         if not light_relay.is_on():
-            log(f"[INFO] Turning light on for sunrise supplement for {light_on_end-now_seconds} seconds")
+            log(f"[INFO] Turning light on for sunrise supplement for {light_on_end_sunrise-now_seconds} seconds")
             light_relay.on()
     elif (light_on_start_sunset <= now_seconds < light_on_end_sunset):
         if not light_relay.is_on():
             log(f"[INFO] Turning light on for sunset supplement for {light_on_end_sunset-now_seconds} seconds")
             light_relay.on()
-
+    else:
+        if light_relay.is_on():
+            light_relay.off()
+            log(f"[INFO] Turning light off")
         
 async def task_time_sync(now):
     if now[3] > 3:
