@@ -6,30 +6,30 @@ CACHE_DIR = "sun_cache"
 def build_month_cache(year, month, lat, lng, log):
     sun_data = {}
     log(f"Bulding sunrise/sunset cache for {year}/{month}")
-    for day in range(1, 32):
-        try:
+    try:
+        for day in range(1, 32):
             t = time.mktime((year, month, day, 0, 0, 0, 0, 0))
             tm = time.localtime(t)
             date_str = f"{tm[0]:04d}-{tm[1]:02d}-{tm[2]:02d}"
             url = f"https://api.sunrisesunset.io/json?lat={lat}&lng={lng}&date={date_str}"
+            print(f"url {url}")
             r = urequests.get(url)
             js = r.json()['results']
             sun_data[date_str] = js
             time.sleep(0.3)
-        except Exception as e:
-            print("downloading day")
-            sys.print_exception(e)
-            break
-    with open(f"{CACHE_DIR}/{year}-{month:02d}.json", 'w') as f:
-        f.write(json.dumps(sun_data))
-    log(f"Wrote sunrise/sunset cache for {year}/{month}")
+        with open(f"{CACHE_DIR}/{year}-{month:02d}.json", 'w') as f:
+            f.write(json.dumps(sun_data))
+        log(f"Wrote sunrise/sunset cache for {year}/{month}")
+    except Exception as e:
+        sys.print_exception(e)
 def load_sun_data():
     try:
         now = time.localtime()
         fname = f"{CACHE_DIR}/{now[0]:04d}-{now[1]:02d}.json"
         with open(fname) as f:
             return json.loads(f.read())
-    except:
+    except Exception as e:
+        print (e)
         return {}
 
 async def manage_cache(now, lat, lng, log):
@@ -73,3 +73,14 @@ def max_cache_age_months(current_year, current_month):
         return max_age
 
 
+
+if __name__ == "__main__":
+    print(load_sun_data())
+    year= 2026
+    month = 2
+    day = 2
+    t = time.mktime((year, month, day, 0, 0, 0, 0, 0))
+    tm = time.localtime(t)
+    date_str = f"{tm[0]:04d}-{tm[1]:02d}-{tm[2]:02d}"
+    print(date_str)
+    print(build_month_cache(year,month,40.741895,-73.989308,print))
