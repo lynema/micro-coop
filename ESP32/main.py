@@ -26,7 +26,7 @@ HTML_SERVER_RUNNING=False
 FAILSAFE_OPEN_TO_CLOSED = 22 * 3600 + 30 * 60   # 10:30 PM
 FAILSAFE_CLOSED_TO_OPEN = 7 * 3600             # 7:00 AM
 
-wdt = machine.WDT(timeout=30000)
+wdt = machine.WDT(timeout=90000)
 
 # Track recent door action status with a timer flag
 recent_action_flag = False
