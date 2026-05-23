@@ -1,5 +1,5 @@
 # micro-coop
-Some micropython microcontroller work to automate a chicken coop
+Some micropython microcontroller work to automate a chicken coop!
 
 This project started with a T-PicoC3 from Liligo and then evolved into running on a ESP32-S3-DevKitC-1-N8R2 Development Board.  After experiencing WiFi connection troubles with the S3, it moved to the ESP32-C6.  Currently, the ESP32-C6 is my recommendation.
 
