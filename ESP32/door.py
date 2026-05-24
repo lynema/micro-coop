@@ -1,33 +1,217 @@
-# --- DOOR AUTOMATION ---
-def auto_check(now_sec, sunrise_sec, sunset_sec, FAILSAFE, FAILSAFE_CLOSED_TO_OPEN, FAILSAFE_OPEN_TO_CLOSED):
-    
-    OPEN_STATE="open"
-    CLOSE_STATE="close"
-    
-    #open 10 minutes before or after sunrise
-    if sunrise_sec - 600 <= now_sec < sunrise_sec + 600:
-        return (OPEN_STATE, "Opening door at sunrise")
-    #close 10-20 minutes after sunset plus a bit of a buffer if it is before FAILSAFE_OPEN_TO_CLOSED
-    elif sunset_sec + 600 <= now_sec < sunset_sec + 1200:
-        return (CLOSE_STATE, "Closing door at sunset")
-    elif FAILSAFE:
-        mod_seconds = now_sec % 86400
-        if (FAILSAFE_OPEN_TO_CLOSED <= mod_seconds
-            or min(sunrise_sec - 600,FAILSAFE_CLOSED_TO_OPEN == FAILSAFE_CLOSED_TO_OPEN)
-            and (mod_seconds < FAILSAFE_CLOSED_TO_OPEN)):
-            return (CLOSE_STATE,"[FAILSAFE] Closing door due to time fallback.")
-        elif FAILSAFE_CLOSED_TO_OPEN <= mod_seconds < sunset_sec + 600:
-            return (OPEN_STATE,"[FAILSAFE] Opening door due to time fallback.")
-    else:
+def auto_check(
+    now_sec,
+    sunrise_sec,
+    sunset_sec,
+    FAILSAFE,
+    MAX_CLOSED_TO_OPEN,
+    MAX_OPEN_TO_CLOSED
+):
+
+    OPEN_STATE = "open"
+    CLOSE_STATE = "close"
+
+    OPENING_MSG = "Opening door"
+    CLOSING_MSG = "Closing door"
+
+    FAILSAFE_DAYTIME_MSG = "[FAILSAFE] Keeping door open during scheduled daytime"
+
+    FAILSAFE_NIGHTTIME_MSG = "[FAILSAFE] Keeping door closed during scheduled nighttime"
+
+    mod_seconds = now_sec % 86400
+
+    effective_open = (
+        min(sunrise_sec, MAX_CLOSED_TO_OPEN)
+        if FAILSAFE else sunrise_sec
+    )
+
+    effective_close = (
+        min(sunset_sec, MAX_OPEN_TO_CLOSED)
+        if FAILSAFE else sunset_sec
+    )
+
+    open_window = (
+        effective_open - 600 <= mod_seconds < effective_open + 600
+    )
+
+    close_window = (
+        effective_close + 600 <= mod_seconds < effective_close + 1200
+    )
+
+    daytime = (
+        effective_open + 600 <= mod_seconds < effective_close + 600
+    )
+
+    if open_window:
+        return (OPEN_STATE, OPENING_MSG)
+
+    elif close_window:
+        return (CLOSE_STATE, CLOSING_MSG)
+
+    elif not FAILSAFE:
         return None
-    
+
+    elif daytime:
+        return (OPEN_STATE, FAILSAFE_DAYTIME_MSG)
+
+    return (CLOSE_STATE, FAILSAFE_NIGHTTIME_MSG)
+
+
 if __name__ == "__main__":
-    assert auto_check(1000,1000,2000, False, 0, 0) == ("open","Opening door at sunrise")
-    assert auto_check(2000,0000,2000, False, 0, 0) == None
-    assert auto_check(2600,0000,2000, False, 0000, 3000) == ("close","Closing door at sunset")
-    #before sunrise failsafe closed
-    assert auto_check(1000,5000,10000, True, 2000, 20000) == ("close","[FAILSAFE] Closing door due to time fallback.")
-    #at sunset failsafe closed
-    assert auto_check(2000,0000,3000, True, 1000, 2000) == ("close","[FAILSAFE] Closing door due to time fallback.")
-    assert auto_check(2000,5000,10000, True, 2000, 20000) == ("open","[FAILSAFE] Opening door due to time fallback.")
-    assert auto_check(4000,5000,10000, True, 1000, 20000) == ("open","[FAILSAFE] Opening door due to time fallback.")
+
+    # now_sec,sunrise_sec,sunset_sec,
+    # FAILSAFE,MAX_CLOSED_TO_OPEN,MAX_OPEN_TO_CLOSED
+
+    # ------------------------------------------------------------
+    # BASIC SUNRISE OPEN
+    # ------------------------------------------------------------
+
+    print(auto_check(1000, 1000, 2000, False, 0, 0))
+    assert auto_check(
+        1000, 1000, 2000,
+        False, 0, 0
+    ) == ("open", "Opening door")
+
+
+    # ------------------------------------------------------------
+    # BASIC SUNSET CLOSE
+    # ------------------------------------------------------------
+
+    print(auto_check(2600, 0, 2000, False, 0, 3000))
+    assert auto_check(
+        2600, 0, 2000,
+        False, 0, 3000
+    ) == ("close", "Closing door")
+
+    # ------------------------------------------------------------
+    # FAILSAFE EARLIER OPEN TIME WINS
+    # ------------------------------------------------------------
+
+    print(auto_check(1400, 5000, 10000, True, 1000, 20000))
+
+    assert auto_check(
+        1200, 5000, 10000,
+        True, 1000, 20000
+    ) == (
+        "open",
+        "Opening door"
+    )
+
+    # ------------------------------------------------------------
+    # FAILSAFE NIGHTTIME CLOSED
+    # ------------------------------------------------------------
+
+    print(auto_check(1000, 5000, 10000, True, 2000, 20000))
+    assert auto_check(
+        1000, 5000, 10000,
+        True, 2000, 20000
+    ) == (
+        "close",
+        "[FAILSAFE] Keeping door closed during scheduled nighttime"
+    )
+
+    # ------------------------------------------------------------
+    # FAILSAFE DAYTIME STATE
+    # ------------------------------------------------------------
+
+    print(auto_check(7000, 5000, 10000, True, 2000, 20000))
+    assert auto_check(
+        7000, 5000, 10000,
+        True, 2000, 20000
+    ) == (
+        "open",
+        "[FAILSAFE] Keeping door open during scheduled daytime"
+    )
+
+    # ------------------------------------------------------------
+    # FAILSAFE EARLIER OPEN TIME WINS
+    # ------------------------------------------------------------
+
+    print(auto_check(2000, 5000, 10000, True, 1000, 20000))
+    assert auto_check(
+        1400, 5000, 10000,
+        True, 1000, 20000
+    ) == (
+        "open",
+        "Opening door"
+    )
+
+    # ------------------------------------------------------------
+    # FAILSAFE EARLIER CLOSE TIME WINS
+    # ------------------------------------------------------------
+
+    print(auto_check(2600, 0, 5000, True, 0, 2000))
+    assert auto_check(
+        2600, 0, 5000,
+        True, 0, 2000
+    ) == (
+        "close",
+        "Closing door"
+    )
+
+    # ------------------------------------------------------------
+    # REGRESSION:
+    # sunrise open should NOT re-close before failsafe open
+    # ------------------------------------------------------------
+
+    print(auto_check(
+        6*3600 + 23*60,
+        5*3600 + 54*60,
+        20*3600,
+        True,
+        7*3600,
+        21*3600
+    ))
+
+    assert auto_check(
+        6*3600 + 23*60,
+        5*3600 + 54*60,
+        20*3600,
+        True,
+        7*3600,
+        21*3600
+    ) == (
+        "open",
+        "[FAILSAFE] Keeping door open during scheduled daytime"
+    )
+
+    # ------------------------------------------------------------
+    # EXACT OPEN WINDOW LOWER BOUNDARY
+    # ------------------------------------------------------------
+
+    print(auto_check(4400, 5000, 10000, False, 0, 0))
+    assert auto_check(
+        4400, 5000, 10000,
+        False, 0, 0
+    ) == (
+        "open",
+        "Opening door"
+    )
+
+    # ------------------------------------------------------------
+    # EXACT CLOSE WINDOW LOWER BOUNDARY
+    # ------------------------------------------------------------
+
+    print(auto_check(10600, 5000, 10000, False, 0, 0))
+    assert auto_check(
+        10600, 5000, 10000,
+        False, 0, 0
+    ) == (
+        "close",
+        "Closing door"
+    )
+    
+    # ------------------------------------------------------------
+    # NONE WHEN NO FAILSAFE AND OUTSIDE NORMAL WINDOWS FOR RISE/SET
+    # ------------------------------------------------------------
+    
+    assert auto_check(
+        2000, 0, 2000,
+        False, 0, 0
+    ) == None
+
+    assert auto_check(
+        50000, 5000, 10000,
+        False, 0, 0
+    ) == None
+
+    print("All tests passed.")

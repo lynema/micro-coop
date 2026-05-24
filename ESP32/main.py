@@ -26,7 +26,7 @@ HTML_SERVER_RUNNING=False
 FAILSAFE_OPEN_TO_CLOSED = 22 * 3600 + 30 * 60   # 10:30 PM
 FAILSAFE_CLOSED_TO_OPEN = 7 * 3600             # 7:00 AM
 
-wdt = machine.WDT(timeout=90000)
+wdt = machine.WDT(timeout=300000)
 
 # Track recent door action status with a timer flag
 recent_action_flag = False
@@ -156,6 +156,15 @@ def get_sunset_padding_time(sunset_sec):
     global FAILSAFE_OPEN_TO_CLOSED
     return (FAILSAFE_OPEN_TO_CLOSED - sunset_sec) * .33  if sunset_sec < FAILSAFE_OPEN_TO_CLOSED else 0
 
+def seconds_to_time(seconds):
+    seconds %= 86400
+    hours = seconds // 3600
+    minutes = (seconds % 3600) // 60
+    suffix = "AM" if hours < 12 else "PM"
+    hours = hours % 12
+    if hours == 0:
+        hours = 12
+    return f"{hours}:{minutes:02d}{suffix}"
 
 def sync_time():
     global config, LAST_NTP_SYNC_MDAY
@@ -244,7 +253,6 @@ def connect_wifi(wifi):
 
 # --- HTML PAGE ---
 def html_page():
-    global FAILSAFE_OPEN_TO_CLOSED
     now = time.localtime()
     date_str = f"{now[0]:04d}-{now[1]:02d}-{now[2]:02d}"
     local_time_str = f"{now[3]:02d}:{now[4]:02d}:{now[5]:02d}"
@@ -252,8 +260,10 @@ def html_page():
     sun_data = load_sun_data()
     sunrise_seconds, sunset_seconds = today_times(sun_data)
     sunrise_str = sun_data.get(date_str, {}).get('sunrise', 'N/A')
-    padding = get_sunset_padding_time(sunset_seconds)
+    padding = get_sunset_padding_time(sunset_seconds) % 60
     sunset_str = sun_data.get(date_str, {}).get('sunset', 'N/A')
+    failsafe_open_str=seconds_to_time(FAILSAFE_CLOSED_TO_OPEN)
+    failsafe_close_str=seconds_to_time(FAILSAFE_OPEN_TO_CLOSED)
     sync_time_str = LAST_NTP_SYNC_MDAY
     current_threshold = motor_config.get("current_threshold", "N/A")
     move_timeout_open_ms = motor_config.get("move_timeout_open_ms", "N/A")
@@ -304,9 +314,9 @@ MCU Temp: <b>{internal_temperature}F</b>
 <p>Local Date and Time: <b>{date_str} {local_time_str}</b></p>
 <p>Local Time Seconds: <b>{local_time_seconds}</b></p>
 <p>Sunrise (Door opens between 10m before and 10m after): <b>{sunrise_str}</b></p>
-<p>Sunset (Door closes between 10-20m after plus padding): <b>{sunset_str} {padding}</b></p>
-<p>Closed to Open Threshold Seconds: <b>{FAILSAFE_CLOSED_TO_OPEN}</b></p>
-<p>Open to Closed Threshold Seconds: <b>{FAILSAFE_OPEN_TO_CLOSED}</b></p>
+<p>Sunset (Door closes between 10-20m after plus padding (minutes)): <b>{sunset_str} {padding}</b></p>
+<p>If failsafe, maintain open the door by sunrise or: <b>{failsafe_open_str}</b></p>
+<p>If failsafe, maintain closed the door by sunset: <b>{failsafe_close_str}</b></p>
 <p>Recent Action Cooldown: <b>{recent_action_flag}</b></p>
 <p>Last Sync Mday: <b>{sync_time_str}</b></p>
 <p>Additional Cached Months: <b>{max_cache_age}</b></p>
