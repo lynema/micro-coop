@@ -260,7 +260,7 @@ def html_page():
     sun_data = load_sun_data()
     sunrise_seconds, sunset_seconds = today_times(sun_data)
     sunrise_str = sun_data.get(date_str, {}).get('sunrise', 'N/A')
-    padding = get_sunset_padding_time(sunset_seconds) % 60
+    padding_minutes = get_sunset_padding_time(sunset_seconds) / 60
     sunset_str = sun_data.get(date_str, {}).get('sunset', 'N/A')
     failsafe_open_str=seconds_to_time(FAILSAFE_CLOSED_TO_OPEN)
     failsafe_close_str=seconds_to_time(FAILSAFE_OPEN_TO_CLOSED)
@@ -314,7 +314,7 @@ MCU Temp: <b>{internal_temperature}F</b>
 <p>Local Date and Time: <b>{date_str} {local_time_str}</b></p>
 <p>Local Time Seconds: <b>{local_time_seconds}</b></p>
 <p>Sunrise (Door opens between 10m before and 10m after): <b>{sunrise_str}</b></p>
-<p>Sunset (Door closes between 10-20m after plus padding (minutes)): <b>{sunset_str} {padding}</b></p>
+<p>Sunset (Door closes between 10-20m after plus padding (minutes)): <b>{sunset_str} {padding_minutes}</b></p>
 <p>If failsafe, maintain open the door by sunrise or: <b>{failsafe_open_str}</b></p>
 <p>If failsafe, maintain closed the door by sunset: <b>{failsafe_close_str}</b></p>
 <p>Recent Action Cooldown: <b>{recent_action_flag}</b></p>
